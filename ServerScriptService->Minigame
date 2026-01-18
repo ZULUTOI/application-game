@@ -1,0 +1,234 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ProfileStore = require(game.ServerScriptService.ProfileStore)
+local Players = game:GetService("Players")
+
+local status = workspace.Status
+local timer = 0
+local curMap
+
+local killPartConnections = {}
+local winPartConnections = {}
+
+local PROFILE_TEMPLATE = {
+	Wins = 0,
+	Items = {},
+}
+
+local PlayerStore = ProfileStore.New("PlayerStore", PROFILE_TEMPLATE)
+local Profiles: {[Player]: typeof(PlayerStore:StartSessionAsync())} = {}
+local function PlayerAdded(player:Player)
+	local profile = PlayerStore:StartSessionAsync('{player.UserId}', {
+		Cancel = function()
+			return player.Parent ~= Players
+		end,
+	})
+	if profile ~= nil then
+		profile:AddUserId(player.UserId)
+		profile:Reconcile()
+		
+		profile.OnSessionEnd:Connect(function()
+			Profiles[player] = nil
+			player:Kick('Profile session end - Please rejoin')
+		end)
+		
+		if player.Parent == Players then
+			Profiles[player] = profile
+			
+			local leaderboard = Instance.new("Folder")
+			leaderboard.Parent = player
+			leaderboard.Name = "leaderstats"
+			
+			local wins = Instance.new("IntValue")
+			wins.Parent = leaderboard
+			wins.Name = "Wins"
+			wins.Value = profile.Data.Wins
+			
+			for _, itemName in pairs(Profiles[player].Data.Items) do
+				local itemC = ReplicatedStorage.Items[itemName]:Clone()
+				local itemC2 = ReplicatedStorage.Items[itemName]:Clone()
+				itemC.Parent = player.Backpack
+				itemC2.Parent = player.StarterGear
+			end
+		else
+			profile:EndSession()
+		end
+	else
+		player:Kick('Data failed to load - Please rejoin')
+	end
+end
+--  ^ Loading data and creating leaderboard
+
+for _, player in Players:GetPlayers() do
+	task.spawn(PlayerAdded, player)
+end
+
+Players.PlayerAdded:Connect(PlayerAdded)
+
+Players.PlayerRemoving:Connect(function(player)
+	local profile = Profiles[player]
+	if profile ~= nil then
+		profile:EndSession()
+	end
+end)
+--  ^ ProfileStore usage
+
+ReplicatedStorage.BuyItem.OnServerEvent:Connect(function(player, itemName)
+	if ReplicatedStorage.Items:FindFirstChild(itemName)
+		and Profiles[player].Data.Wins >= ReplicatedStorage.Items[itemName]:GetAttribute("Price")
+		and not player.Backpack:FindFirstChild(itemName)
+		and not player.Character:FindFirstChild(itemName)
+		and not table.find(Profiles[player], itemName) then
+		
+		Profiles[player].Data.Wins -= ReplicatedStorage.Items[itemName]:GetAttribute("Price")
+		player.leaderstats.Wins.Value = Profiles[player].Data.Wins
+		
+		table.insert(Profiles[player].Data.Items, itemName)
+		
+		local itemC = ReplicatedStorage.Items[itemName]:Clone()
+		local itemC2 = ReplicatedStorage.Items[itemName]:Clone()
+		itemC.Parent = player.Backpack
+		itemC2.Parent = player.StarterGear
+	end
+end)
+-- ^ Buying a tool
+
+while true do
+	local winners = {}
+	local curMap = nil
+	timer = 15
+	repeat 
+		timer -= 1
+		status.Value = "Intermission.. "..timer
+		task.wait(1)
+	until timer == 0
+	status.Value = "Game starting"
+	task.wait(1.2)
+	--  ^ Start of the loop, giving some time in the lobby
+	
+	for index, connection:RBXScriptConnection in pairs(killPartConnections) do
+		connection:Disconnect()
+		table.remove(killPartConnections, index)
+	end
+	for index, connection:RBXScriptConnection in pairs(winPartConnections) do
+		connection:Disconnect()
+		table.remove(winPartConnections, index)
+	end
+	killPartConnections = {}
+	winPartConnections = {}
+	--  ^ disconnecting previous kill/win parts connections
+	
+	local maps = ReplicatedStorage.Maps:GetChildren()
+	local chosenMap = math.random(1,#maps)
+	for i = 1, #maps do
+		if i == chosenMap then
+			maps[i]:Clone().Parent = workspace
+			curMap = maps[i].Name
+			status.Value = "We will be playing on the "..maps[i].Name.."!"
+		end
+	end
+	--  ^ Map selection
+	
+	for _, part : BasePart in pairs(workspace:FindFirstChild(curMap):GetChildren()) do
+		if part.Name == "KillPart" and part:IsA("BasePart") then
+			table.insert(killPartConnections, part.Touched:Connect(function(hit)
+				if hit.Parent:FindFirstChild("Humanoid") and Players:GetPlayerFromCharacter(hit.Parent) then
+					local humanoidRP : BasePart = hit.Parent:FindFirstChild("HumanoidRootPart")
+					if hit.Parent:IsDescendantOf(workspace.Playing) then
+						humanoidRP.CFrame = CFrame.new(workspace[curMap]:FindFirstChild("Spawn").Position)
+					elseif hit.Parent:IsDescendantOf(workspace.Winners) then
+						humanoidRP.CFrame = CFrame.new(workspace[curMap]:FindFirstChild("WinTP").Position)
+					end
+				end
+			end))
+		elseif part.Name == "WinPart" and part:IsA("BasePart") then
+			table.insert(winPartConnections, part.Touched:Connect(function(hit)
+				if hit.Parent:FindFirstChild("Humanoid") and Players:GetPlayerFromCharacter(hit.Parent) then
+					hit.Parent.Parent = workspace.Winners
+					hit.Parent:FindFirstChild("HumanoidRootPart").CFrame = CFrame.new(workspace[curMap]:FindFirstChild("WinTP").Position)
+				end
+			end))
+		end
+	end
+	--  ^ Make kill/win parts work
+	
+	local playersAll = Players:GetChildren()
+	for i = 1, #playersAll do
+		playersAll[i].Character.Humanoid.WalkSpeed = 1
+	end
+	task.wait(1)
+	--  ^ Reduce walk speed
+	
+	timer = 4
+	repeat
+		task.wait(1)
+		timer -= 1
+		status.Value = timer
+	until timer == 0
+	--  ^ Waiting until the game starts
+	
+	playersAll = Players:GetChildren()
+	for i = 1, #playersAll do
+		local num = math.random(1, 9)
+		playersAll[i].Character.HumanoidRootPart.CFrame = CFrame.new(workspace[curMap]:FindFirstChild("Spawn").Position)
+		playersAll[i].Character.Parent = workspace.Playing
+	end
+	--  ^ Takes everyone to the map
+	
+	task.wait(2)
+	playersAll = Players:GetChildren()
+	for i = 1, #playersAll do
+		playersAll[i].Character.Humanoid.WalkSpeed = 16
+	end
+	--  ^ Walk speed back to normal (have to repeat playersAll because someone might have left or joined)
+	
+	timer = 120
+	repeat
+		timer -= 1
+		status.Value = timer.." seconds left"
+		
+		task.wait(1)
+		
+		local playing = workspace.Playing:GetChildren()
+	until timer == 0 or #playing == 0 --or #playing == 1
+	--  ^ The main loop
+	
+	local winners = workspace.Winners:GetChildren()
+	if #winners > 1 then
+		local finalString = ""
+		for i = 1, #winners do
+			local player = Players:GetPlayerFromCharacter(winners[i])
+			Profiles[player].Data.Wins += 1
+			player.leaderstats.Wins.Value = Profiles[player].Data.Wins
+			task.wait(1.5)
+			if i == #winners then
+				finalString = finalString.." and "..player.DisplayName
+			elseif i == (#winners - 1) then
+				finalString = finalString..player.DisplayName
+			else
+				finalString = finalString..player.DisplayName..", "
+			end
+		end
+		status.Value = finalString.." Are The Winners!!"
+	elseif #winners == 1 then
+		for i = 1, #winners do
+			local player = Players:GetPlayerFromCharacter(winners[i])
+			Profiles[player].Data.Wins += 1
+			player.leaderstats.Wins.Value = Profiles[player].Data.Wins
+			status.Value = player.DisplayName.." Is The Winner!"
+		end
+	elseif #winners == 0 then
+		status.Value = "No one has won..."
+	end
+	--  ^ Win conditions
+	
+	task.wait(4)
+	for _, plr in pairs(Players:GetPlayers()) do
+		local success, errorMsg = pcall(function()
+			plr.Character.HumanoidRootPart.CFrame = CFrame.new(workspace.SpawnLocation.Position)
+			plr.Character.Parent = workspace
+		end)
+	end
+	--  ^ Returns everyone to the lobby
+	
+	workspace[curMap]:Destroy()
+end

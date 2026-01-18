@@ -1,0 +1,22 @@
+local player = game:GetService("Players").LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local buyRemote = ReplicatedStorage:WaitForChild("BuyItem")
+
+local status = workspace:WaitForChild("Status")
+local mainGui = player.PlayerGui:WaitForChild("MainGui")
+local label = mainGui:WaitForChild("Status")
+
+status.Changed:Connect(function() --Server changes the value and the client writes it in the GUI
+	label.Text = status.Value
+end)
+
+for _, item in pairs(workspace:WaitForChild("Shop"):GetChildren()) do
+	item:FindFirstChild("ClickDetector").MouseClick:Connect(function()
+		if player:FindFirstChild("leaderstats"):FindFirstChild("Wins").Value >= ReplicatedStorage.Items[item.Name]:GetAttribute("Price")
+		and not player.Backpack:FindFirstChild(item.Name) and not player.Character:FindFirstChild(item.Name) then
+			buyRemote:FireServer(item.Name)
+		end
+	end)
+end
+--  ^ sends a request to buy, also blocking unnecessary requests (the real checks will still be on server)
